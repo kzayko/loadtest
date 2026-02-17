@@ -1,0 +1,4 @@
+simpy>=4.0.1
+numpy>=1.21.0
+matplotlib>=3.5.0
+python-dotenv>=1.0.0
