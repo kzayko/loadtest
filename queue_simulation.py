@@ -228,7 +228,58 @@ def generate_filename():
     return "_".join(parts)
 
 
-def save_simulation_log(minute_log, filename):
+def compute_stationary_parameters(minute_log):
+    """Вычисляет стационарные параметры симуляции."""
+    # Пропускная способность этапов (RPS), теоретическая
+    stage_throughput_rps = []
+    for i in range(NUM_STAGES):
+        thr = (GEN_Workers[i] / GEN_Stages[i]) / GEN_Timers[i] if GEN_Timers[i] > 0 else 0.0
+        stage_throughput_rps.append(round(thr, 4))
+
+    # Рост очереди на этапе (RPS) = входящий поток на этап − производительность этапа
+    # Входящий поток на этап 0 = INCOMING_RATE; на этап i = min(INCOMING_RATE, throughput_0, ..., throughput_{i-1})
+    stage_queue_growth_rps = []
+    for i in range(NUM_STAGES):
+        inflow = INCOMING_RATE if i == 0 else min(
+            [INCOMING_RATE] + stage_throughput_rps[:i]
+        )
+        growth = inflow - stage_throughput_rps[i]
+        stage_queue_growth_rps.append(round(growth, 6))
+
+    # Рост главной очереди = входящий поток − пропускная способность системы (min по этапам); не меньше макс. роста по этапам
+    system_throughput = min(stage_throughput_rps) if stage_throughput_rps else 0.0
+    main_queue_growth_rps = round(max(0.0, INCOMING_RATE - system_throughput), 6)
+
+    # Время заполнения от 0 до QUEUE_LIMIT при текущем темпе роста; при отсутствии роста — не делим на 0
+    if main_queue_growth_rps > 0:
+        time_to_fill_queue_seconds = round(QUEUE_LIMIT / main_queue_growth_rps, 2)
+    else:
+        time_to_fill_queue_seconds = None
+
+    return {
+        'stage_throughput_rps': stage_throughput_rps,
+        'stage_queue_growth_rps': stage_queue_growth_rps,
+        'main_queue_growth_rps': main_queue_growth_rps,
+        'time_to_fill_queue_seconds': time_to_fill_queue_seconds,
+    }
+
+
+def print_stationary_parameters(stationary):
+    """Вывод стационарных параметров в консоль."""
+    print("\n=== Stationary parameters ===")
+    print("Stage throughput (RPS):", stationary['stage_throughput_rps'])
+    print("Stage queue growth (RPS):", stationary['stage_queue_growth_rps'])
+    print("Main queue growth (RPS):", stationary['main_queue_growth_rps'])
+    tt = stationary['time_to_fill_queue_seconds']
+    if tt is not None:
+        print(f"Time to fill queue: {tt:.2f} sec ({tt/3600:.2f} h)")
+    else:
+        print("Time to fill queue: N/A (queue not growing)")
+
+
+def save_simulation_log(minute_log, filename, stationary_parameters=None):
+    if stationary_parameters is None:
+        stationary_parameters = {}
     log_data = {
         'simulation_parameters': {
             'incoming_rate': INCOMING_RATE,
@@ -240,6 +291,7 @@ def save_simulation_log(minute_log, filename):
             'GEN_Timers': GEN_Timers,
             'GEN_Workers': GEN_Workers,
         },
+        'stationary_parameters': stationary_parameters,
         'minute_reports': minute_log
     }
     json_filename = f"{filename}.json"
@@ -385,5 +437,7 @@ if __name__ == "__main__":
     print(f"Results filename: {filename}")
 
     stats, minute_log, generation_times = run_simulation()
-    save_simulation_log(minute_log, filename)
+    stationary = compute_stationary_parameters(minute_log)
+    save_simulation_log(minute_log, filename, stationary)
+    print_stationary_parameters(stationary)
     plot_statistics(stats, filename, generation_times)
